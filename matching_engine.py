@@ -1,4 +1,17 @@
-def calculate_weighted_match(job_skills: list, seeker_skills: list) -> dict:
+def _get(obj, attr):
+    """Safely read an attribute from either a Pydantic model or a plain dict."""
+    if isinstance(obj, dict):
+        return obj.get(attr)
+    return getattr(obj, attr, None)
+
+
+def calculate_weighted_match(
+    job_skills: list,
+    seeker_skills: list,
+    job_loc: int = 0,
+    home_loc: int | None = None,
+    pref_locs: list[int] | None = None,
+) -> dict:
     """
     Calculates a sophisticated match score prioritizing Mandatory skills over Optional ones.
     """
@@ -8,16 +21,23 @@ def calculate_weighted_match(job_skills: list, seeker_skills: list) -> dict:
             "raw_jaccard": 0.0,
             "final_weighted_score": 0.0,
             "mandatory_met": 0,
-            "optional_met": 0
+            "optional_met": 0,
+            "geo_multiplier": 1.0,
         }
 
     # 1. Parse job skills into categorized Python Sets for O(1) high-speed operations
-    mandatory_requirements = {js.skill_id for js in job_skills if js.requirement_type == 'Mandatory'}
-    optional_requirements = {js.skill_id for js in job_skills if js.requirement_type == 'Optional'}
+    mandatory_requirements = {
+        _get(js, 'skill_id') for js in job_skills
+        if _get(js, 'requirement_type') == 'Mandatory'
+    }
+    optional_requirements = {
+        _get(js, 'skill_id') for js in job_skills
+        if _get(js, 'requirement_type') == 'Optional'
+    }
     all_requirements = mandatory_requirements.union(optional_requirements)
-    
+
     # 2. Parse seeker skills
-    applicant_skills = {ss.skill_id for ss in seeker_skills}
+    applicant_skills = {_get(ss, 'skill_id') for ss in seeker_skills}
 
     # 3. Standard Jaccard (Intersection over Union) - For baseline data
     intersection = all_requirements.intersection(applicant_skills)
@@ -37,12 +57,23 @@ def calculate_weighted_match(job_skills: list, seeker_skills: list) -> dict:
         achieved_weight = (mandatory_met * 2.0) + (optional_met * 1.0)
         final_score = achieved_weight / total_possible_weight
 
-    # Apply the 40% cap per your hybrid ATS formula requirement
-    weighted_skill_score = round(final_score * 0.40, 4)
+    # 5. Geographic Proximity Multiplier
+    pref_locs = pref_locs or []
+    if home_loc is not None and job_loc == home_loc:
+        geo_multiplier = 1.0   # Exact home-municipality match
+    elif job_loc in pref_locs:
+        geo_multiplier = 0.85  # Within preferred municipalities
+    else:
+        geo_multiplier = 0.50  # Outside preferred / home location
+
+    # Apply the 40% cap per your hybrid ATS formula requirement,
+    # then apply the geographic multiplier.
+    weighted_skill_score = round(final_score * 0.40 * geo_multiplier, 4)
 
     return {
         "raw_jaccard": round(raw_jaccard, 4),
         "final_weighted_score": weighted_skill_score,
         "mandatory_met": mandatory_met,
-        "optional_met": optional_met
+        "optional_met": optional_met,
+        "geo_multiplier": geo_multiplier,
     }
